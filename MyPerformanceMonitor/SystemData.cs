@@ -1,220 +1,211 @@
 using System;
 using System.Diagnostics;
 using System.Management;
+using static MyPerformanceMonitor.Model.Enum;
 
 namespace SystemMonitor
 {
-    /// <summary>
-    /// Tato tøída slouí k získávání systémovıch dat pro SystemMonitor.
-    /// </summary>
     internal class SystemData
     {
-        /// <summary>
-        /// Konstruktor tøídy SystemData inicializuje instanci a pøipraví poèáteèní hodnoty pro sledování vıkonu síovıch rozhraní.
-        /// </summary>
+        private PerformanceCounter _memoryCounter;
+        private PerformanceCounter _diskReadCounter;
+        private PerformanceCounter _diskWriteCounter;
+
+        private string[] _instanceNames;
+        private PerformanceCounter[] _netRecvCounters;
+        private PerformanceCounter[] _netSentCounters;
+
         internal SystemData()
         {
+            InitializeCounters();
+        }
+
+        /// <summary>
+        /// Metoda pro inicializaci vıkonnostních èítaèù
+        /// </summary>
+        private void InitializeCounters()
+        {
+            _memoryCounter = InitializeCounter("Memory", "Available Bytes");
+            _diskReadCounter = InitializeCounter("PhysicalDisk", "Disk Read Bytes/sec", "_Total");
+            _diskWriteCounter = InitializeCounter("PhysicalDisk", "Disk Write Bytes/sec", "_Total");
+
             PerformanceCounterCategory cat = new PerformanceCounterCategory("Network Interface");
-            InstanceNames = cat.GetInstanceNames();
+            _instanceNames = cat.GetInstanceNames();
 
-            _netRecvCounters = new PerformanceCounter[InstanceNames.Length];
-            for (int i = 0; i < InstanceNames.Length; i++)
+            _netRecvCounters = new PerformanceCounter[_instanceNames.Length];
+            _netSentCounters = new PerformanceCounter[_instanceNames.Length];
+
+            for (int i = 0; i < _instanceNames.Length; i++)
+            {
                 _netRecvCounters[i] = new PerformanceCounter();
-
-            _netSentCounters = new PerformanceCounter[InstanceNames.Length];
-            for (int i = 0; i < InstanceNames.Length; i++)
                 _netSentCounters[i] = new PerformanceCounter();
-
-            CompactFormat = false;
+            }
         }
 
-
         /// <summary>
-        /// Získá nebo nastaví hodnotu indikující, zda se má vıstupní formát dat komprimovat.
+        /// Metoda pro inicializaci vıkonnostního èítaèe s moností další konfigurace
         /// </summary>
-        bool compactFormat;
-        internal bool CompactFormat
+        /// <param name="categoryName"></param>
+        /// <param name="counterName"></param>
+        /// <param name="instanceName"></param>
+        /// <returns></returns>
+        private PerformanceCounter InitializeCounter(string categoryName, string counterName, string instanceName = null)
         {
-            get { return compactFormat; }
-            set { compactFormat = value; }
+            var counter = new PerformanceCounter(categoryName, counterName, instanceName);
+            // Další konfigurace, pokud je potøeba
+            return counter;
         }
 
         /// <summary>
-        /// Získá hodnotu procesorového vytíení.
+        /// Metoda pro získání hodnoty z vıkonnostního èítaèe
         /// </summary>
-        /// <returns>Procesorové vytíení v procentech.</returns>
-        internal double GetProcessorData()
+        /// <param name="counter"></param>
+        /// <param name="categoryName"></param>
+        /// <param name="counterName"></param>
+        /// <param name="instanceName"></param>
+        /// <returns></returns>
+        internal double GetCounterValue(PerformanceCounter counter, string categoryName, string counterName, string instanceName)
         {
-            double d = GetCounterValue(_cpuCounter, "Processor", "% Processor Time", "_Total");
-            return d;
+            counter.CategoryName = categoryName;
+            counter.CounterName = counterName;
+            counter.InstanceName = instanceName;
+            return counter.NextValue();
         }
 
         /// <summary>
-        /// Získá data o vyuití pamìti.
+        /// Metoda pro získání informací o vyuití pamìti v procentech a v bytech
         /// </summary>
-        /// <returns>Data o vyuití pamìti ve formátu textu.</returns>
-        internal string GetMemoryVData()
+        /// <returns></returns>
+        internal string GetMemoryDataV()
         {
-            string str;
-            double d = GetCounterValue(_memoryCounter, "Memory", "% Committed Bytes In Use", null);
-            str = d.ToString("F") + "% (";
+            double committedBytesInUse = GetCounterValue(_memoryCounter, "Memory", "% Committed Bytes In Use", null);
+            string str = committedBytesInUse.ToString("F") + "% (";
 
-            d = GetCounterValue(_memoryCounter, "Memory", "Committed Bytes", null);
-            str += FormatBytes(d) + " / ";
+            double committedBytes = GetCounterValue(_memoryCounter, "Memory", "Committed Bytes", null);
+            str += FormatBytes(committedBytes) + " / ";
 
-            d = GetCounterValue(_memoryCounter, "Memory", "Commit Limit", null);
-            return str + FormatBytes(d) + ") ";
+            double commitLimit = GetCounterValue(_memoryCounter, "Memory", "Commit Limit", null);
+            return str + FormatBytes(commitLimit) + ") ";
         }
 
         /// <summary>
-        /// Získá data o vyuití fyzické pamìti.
+        /// Metoda pro získání informací o vyuití fyzické pamìti v procentech a v bytech
         /// </summary>
-        /// <returns>Data o vyuití fyzické pamìti ve formátu textu.</returns>
-        internal string GetMemoryPData()
+        /// <returns></returns>
+        internal string GetMemoryDataP()
         {
-            string s = QueryComputerSystem("totalphysicalmemory");
-            double totalPhysicalMemory = Convert.ToDouble(s);
+            double totalPhysicalMemory = GetTotalPhysicalMemory();
+            double availableBytes = GetCounterValue(_memoryCounter, "Memory", "Available Bytes", null);
+            double usedPhysicalMemory = totalPhysicalMemory - availableBytes;
 
-            double d = GetCounterValue(_memoryCounter, "Memory", "Available Bytes", null);
-            d = totalPhysicalMemory - d;
-
-            s = CompactFormat ? "%" : "% (" + FormatBytes(d) + " / " + FormatBytes(totalPhysicalMemory) + ")";
-            d /= totalPhysicalMemory;
-            d *= 100;
-            return CompactFormat ? ((int)d).ToString() + s : d.ToString("F") + s;
+            string s = "% (" + FormatBytes(usedPhysicalMemory) + " / " + FormatBytes(totalPhysicalMemory) + ")";
+            double percentageUsed = (usedPhysicalMemory / totalPhysicalMemory) * 100;
+            return percentageUsed.ToString("F") + s;
         }
 
-
         /// <summary>
-        /// Reprezentuje rùzné typy pøístupu tıkající se disku.
+        /// Metoda pro získání celkové fyzické pamìti
         /// </summary>
-        internal enum DiskData
+        /// <returns></returns>
+        private double GetTotalPhysicalMemory()
         {
-            /// <summary>
-            /// Ètení a zápis
-            /// </summary>
-            ReadAndWrite,
-
-            /// <summary>
-            /// Ètení a zápis
-            /// </summary>
-            Read,
-
-            /// <summary>
-            /// Ètení a zápis
-            /// </summary>
-            Write,
-
-            /// <summary>
-            /// Èas
-            /// </summary>
-            Time
+            string totalPhysicalMemoryString = QueryComputerSystem("totalphysicalmemory");
+            return Convert.ToDouble(totalPhysicalMemoryString);
         }
 
-
         /// <summary>
-        /// Získá data tıkající se disku na základì zvoleného typu dat.
+        /// Metoda pro získání informací o vyuití disku (ètení, zápis, èas, ètení a zápis)
         /// </summary>
-        /// <param name="dd">Typ dat disku.</param>
-        /// <returns>Hodnota dat disku odpovídající zvolenému typu.</returns>
+        /// <param name="dd"></param>
+        /// <returns></returns>
         internal double GetDiskData(DiskData dd)
         {
-            return dd == DiskData.Read ?
-                GetCounterValue(_diskReadCounter, "PhysicalDisk", "Disk Read Bytes/sec", "_Total") :
-                dd == DiskData.Write ?
-                GetCounterValue(_diskWriteCounter, "PhysicalDisk", "Disk Write Bytes/sec", "_Total") :
-                dd == DiskData.Time ?
-                GetCounterValue(_diskWriteCounter, "PhysicalDisk", "% Disk Time", "_Total") :
-                dd == DiskData.ReadAndWrite ?
-                GetCounterValue(_diskReadCounter, "PhysicalDisk", "Disk Read Bytes/sec", "_Total") +
-                GetCounterValue(_diskWriteCounter, "PhysicalDisk", "Disk Write Bytes/sec", "_Total") :
-                0;
-        }
+            double result = 0;
 
-
-        /// <summary>
-        /// Reprezentuje typy síovıch dat, která lze získat.
-        /// </summary>
-        internal enum NetData
-        {
-            /// <summary>
-            /// Pøijato a odesláno
-            /// </summary>
-            ReceivedAndSent,
-
-            /// <summary>
-            /// Pøijato
-            /// </summary>
-            Received,
-
-            /// <summary>
-            /// Pøijato
-            /// </summary>
-            Sent
-        }
-
-
-        /// <summary>
-        /// Získá data o síti na základì zvoleného typu.
-        /// </summary>
-        /// <param name="nd">Typ síovıch dat k získání.</param>
-        /// <returns>Hodnota síovıch dat.</returns>
-        internal double GetNetData(NetData nd)
-        {
-            if (InstanceNames.Length == 0)
-                return 0;
-
-            double d = 0;
-            for (int i = 0; i < InstanceNames.Length; i++)
+            switch (dd)
             {
-                d += nd == NetData.Received ?
-                    GetCounterValue(_netRecvCounters[i], "Network Interface", "Bytes Received/sec", InstanceNames[i]) :
-                    nd == NetData.Sent ?
-                    GetCounterValue(_netSentCounters[i], "Network Interface", "Bytes Sent/sec", InstanceNames[i]) :
-                    nd == NetData.ReceivedAndSent ?
-                    GetCounterValue(_netRecvCounters[i], "Network Interface", "Bytes Received/sec", InstanceNames[i]) +
-                    GetCounterValue(_netSentCounters[i], "Network Interface", "Bytes Sent/sec", InstanceNames[i]) :
-                    0;
+                case DiskData.Read:
+                    result = GetCounterValue(_diskReadCounter, "PhysicalDisk", "Disk Read Bytes/sec", "_Total");
+                    break;
+                case DiskData.Write:
+                    result = GetCounterValue(_diskWriteCounter, "PhysicalDisk", "Disk Write Bytes/sec", "_Total");
+                    break;
+                case DiskData.Time:
+                    result = GetCounterValue(_diskWriteCounter, "PhysicalDisk", "% Disk Time", "_Total");
+                    break;
+                case DiskData.ReadAndWrite:
+                    result = GetCounterValue(_diskReadCounter, "PhysicalDisk", "Disk Read Bytes/sec", "_Total") +
+                             GetCounterValue(_diskWriteCounter, "PhysicalDisk", "Disk Write Bytes/sec", "_Total");
+                    break;
             }
 
-            return d;
+            return result;
         }
 
         /// <summary>
-        /// Vıètovı typ reprezentující jednotky pro formátování bytù.
+        /// Metoda pro získání informací o síovém provozu (pøijatá, odeslaná, pøijatá a odeslaná)
         /// </summary>
-        internal enum Unit
+        /// <param name="nd"></param>
+        /// <returns></returns>
+        internal double GetNetData(NetData nd)
         {
-            /// <summary>
-            /// bajty
-            /// </summary>
-            B,
+            if (_instanceNames.Length == 0)
+                return 0;
 
-            /// <summary>
-            /// kilobajty
-            /// </summary>
-            KB,
+            double totalData = 0;
+            for (int i = 0; i < _instanceNames.Length; i++)
+            {
+                double data = 0;
 
-            /// <summary>
-            /// megabajty
-            /// </summary>
-            MB,
+                switch (nd)
+                {
+                    case NetData.Received:
+                        data = GetCounterValue(_netRecvCounters[i], "Network Interface", "Bytes Received/sec", _instanceNames[i]);
+                        break;
+                    case NetData.Sent:
+                        data = GetCounterValue(_netSentCounters[i], "Network Interface", "Bytes Sent/sec", _instanceNames[i]);
+                        break;
+                    case NetData.ReceivedAndSent:
+                        data = GetCounterValue(_netRecvCounters[i], "Network Interface", "Bytes Received/sec", _instanceNames[i]) +
+                               GetCounterValue(_netSentCounters[i], "Network Interface", "Bytes Sent/sec", _instanceNames[i]);
+                        break;
+                }
 
-            /// <summary>
-            /// gigabajty
-            /// </summary>
-            GB,
+                totalData += data;
+            }
 
-            /// <summary>
-            /// nepodporovaná jednotka
-            /// </summary>
-            ER,
+            return totalData;
         }
+
         /// <summary>
-        /// Formátuje velikost vstupních bytù na základì zvolenıch jednotek.
+        /// Metoda pro získání informací o logickıch discích
         /// </summary>
-        /// <param name="bytes">Velikost v bytech k formátování.</param>
-        /// <returns>Formátovanı øetìzec reprezentující velikost s jednotkou.</returns>
+        /// <returns></returns>
+        internal string LogicalDisk()
+        {
+            string diskSpace = string.Empty;
+            object device, space;
+            ManagementObjectSearcher objCS = new ManagementObjectSearcher("SELECT * FROM Win32_LogicalDisk");
+            foreach (ManagementObject objMgmt in objCS.Get())
+            {
+                device = objMgmt["DeviceID"];
+                if (null != device)
+                {
+                    space = objMgmt["FreeSpace"];
+                    if (null != space)
+                        diskSpace += device.ToString() + FormatBytes(double.Parse(space.ToString())) + ", ";
+                }
+            }
+
+            diskSpace = diskSpace.TrimEnd(',', ' ');
+            return diskSpace;
+        }
+
+        /// <summary>
+        /// Metoda pro formátování bytù na èitelnı øetìzec
+        /// </summary>
+        /// <param name="bytes"></param>
+        /// <returns></returns>
         internal string FormatBytes(double bytes)
         {
             int unit = 0;
@@ -224,16 +215,15 @@ namespace SystemMonitor
                 ++unit;
             }
 
-            string formattedString = CompactFormat ? ((int)bytes).ToString() : bytes.ToString("F") + " ";
+            string formattedString = bytes.ToString("F") + " ";
             return formattedString + ((Unit)unit).ToString();
         }
 
-
         /// <summary>
-        /// Provádí dotaz na systémové údaje na základì zadaného typu.
+        /// Metoda pro dotaz na systémové informace
         /// </summary>
-        /// <param name="type">Typ údajù k získání (napø. "totalphysicalmemory").</param>
-        /// <returns>Øetìzec reprezentující hodnotu získanou z poèítaèového systému.</returns>
+        /// <param name="type"></param>
+        /// <returns></returns>
         internal string QueryComputerSystem(string type)
         {
             string str = null;
@@ -246,63 +236,19 @@ namespace SystemMonitor
         }
 
         /// <summary>
-        /// Rozšiøuje promìnné prostøedí a vrací hodnotu pro zadanı typ.
+        /// Metoda pro dotaz na informace o prostøedí
         /// </summary>
-        /// <param name="type">Typ promìnného prostøedí k rozšíøení (napø. "%TEMP%").</param>
-        /// <returns>Øetìzec reprezentující rozšíøenou hodnotu promìnného prostøedí.</returns>
+        /// <param name="type"></param>
+        /// <returns></returns>
         internal string QueryEnvironment(string type)
         {
             return Environment.ExpandEnvironmentVariables(type);
         }
-
-        /// <summary>
-        /// Získá informace o logickıch diskech a jejich dostupném volném prostoru.
-        /// </summary>
-        /// <returns>Øetìzec obsahující informace o jednotlivıch logickıch discích a jejich dostupném volném prostoru.</returns>
-        internal string LogicalDisk()
-        {
-            string diskSpace = string.Empty;
-            object device, space;
-            ManagementObjectSearcher objCS = new ManagementObjectSearcher("SELECT * FROM Win32_LogicalDisk");
-            foreach (ManagementObject objMgmt in objCS.Get())
-            {
-                device = objMgmt["DeviceID"];       // Napøíklad "C:"
-                if (null != device)
-                {
-                    space = objMgmt["FreeSpace"];   // Napøíklad "10.32 GB" nebo "5.87 GB"
-                    if (null != space)
-                        diskSpace += device.ToString() + FormatBytes(double.Parse(space.ToString())) + ", ";
-                }
-            }
-
-            diskSpace = diskSpace.Substring(0, diskSpace.Length - 2);
-            return diskSpace;
-        }
-
-        /// <summary>
-        /// Získá hodnotu vıkonnostního èítaèe na základì specifikovanıch parametrù.
-        /// </summary>
-        /// <param name="vıkonnostníÈítaè">Instance tøídy PerformanceCounter.</param>
-        /// <param name="kategorieNázev">Název kategorie vıkonnostního èítaèe.</param>
-        /// <param name="názevÈítaèe">Název vıkonnostního èítaèe.</param>
-        /// <param name="názevInstance">Název instance vıkonnostního èítaèe.</param>
-        /// <returns>Hodnota získaná z vıkonnostního èítaèe.</returns>
-        double GetCounterValue(PerformanceCounter vıkonnostníÈítaè, string kategorieNázev, string názevÈítaèe, string názevInstance)
-        {
-            vıkonnostníÈítaè.CategoryName = kategorieNázev;
-            vıkonnostníÈítaè.CounterName = názevÈítaèe;
-            vıkonnostníÈítaè.InstanceName = názevInstance;
-            return vıkonnostníÈítaè.NextValue();
-        }
-
-        PerformanceCounter _memoryCounter = new PerformanceCounter();
-        PerformanceCounter _cpuCounter = new PerformanceCounter();
-        PerformanceCounter _diskReadCounter = new PerformanceCounter();
-        PerformanceCounter _diskWriteCounter = new PerformanceCounter();
-
-        string[] InstanceNames;
-        PerformanceCounter[] _netRecvCounters;
-        PerformanceCounter[] _netSentCounters;
     }
+
+    /// <summary>
+    /// Delegát pro události spojené s logickımi disky
+    /// </summary>
+    /// <param name="s"></param>
     internal delegate void OnLogicalDiskProc(string s);
 }
